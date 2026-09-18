@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcuserstate
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Signing material — never commit
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+
+# Local secrets
+.env
+*.local
