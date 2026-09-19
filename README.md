@@ -110,18 +110,22 @@ hardware or SDKs.
 
 ## Current status
 
-**Documentation & backlog only.** No Xcode project, app build, test result, archive, or
-TestFlight binary exists yet. This repository contains the plan and an executor backlog.
+**Skeleton + CI landed.** `CatchTally.xcodeproj` (SwiftUI app target, bundle id
+`com.infinityball.catchtally`), `Packages/CatchTallyKit` (pure-Swift domain package),
+iPhone-only + zero-network + Xcode-pin CI gates, and a privacy manifest are in place.
+No device/simulator test results, archive, or TestFlight binary exist yet — macOS CI
+builds for the simulator and asserts the iPhone-only/toolchain gates; the domain
+package test suite runs on Linux CI.
 
 Milestones:
 1. ✅ Repo scaffold (README, PLAN, toolchain pin, backlog)
-2. ⬜ Skeleton + CI (iPhone-only, iOS 26 SDK pin, zero-network gate)
+2. ✅ Skeleton + CI (iPhone-only, iOS 26 SDK pin, zero-network gate)
 3. ⬜ Domain layer + Quick Tally vertical slice
 4. ⬜ Session detail, PB board, spot history
 5. ⬜ Backup/export + privacy controls
 6. ⬜ TestFlight release pipeline
 
-## Development / build quickstart (planned)
+## Development / build quickstart
 
 Platform: native SwiftUI, iOS 26 SDK or newer (see `toolchain.json`; current pin: Xcode
 26.0.1 (17A400), iOS SDK 26.0, Swift 6). Pure domain logic lives in a Swift package that
@@ -129,9 +133,9 @@ builds and tests on Linux CI; UI builds on macOS runners. iPhone-only is enforce
 (grep `TARGETED_DEVICE_FAMILY = 1`) and post-build (`UIDeviceFamily == [1]`).
 
 ```bash
-# planned, once the skeleton lands (issue #1)
-swift test --package-path Packages/CatchTallyKit
-xcodebuild -project CatchTally.xcodeproj -scheme CatchTally -sdk iphonesimulator test
+swift test --package-path Packages/CatchTallyKit          # Linux or macOS
+bash scripts/check_zero_network.sh                        # empty-allowlist network scan
+xcodebuild -project CatchTally.xcodeproj -scheme CatchTally -sdk iphonesimulator build
 ```
 
 Signing/TestFlight: releases build against the iOS 26-or-newer SDK and upload via the App

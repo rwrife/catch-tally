@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-package:
+    name: CatchTallyKit (Linux swift test)
+    runs-on: ubuntu-latest
+    container:
+      image: swift:6.2-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Run package tests
+        run: swift test --package-path Packages/CatchTallyKit
+      - name: Zero-network gate
+        run: bash scripts/check_zero_network.sh
+      - name: Gitignore keeps signing material out
+        run: |
+          set -e
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          for f in fake.p8 fake.p12 fake.mobileprovision fake.cer; do
+            touch "$f"
+            git check-ignore -q "$f" || { echo "FAIL: $f is not gitignored"; exit 1; }
+            rm "$f"
+          done
+          echo "Signing-material gitignore check: PASS"
+
+  ios-build:
+    name: iOS build + iPhone-only + toolchain pin
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select exact pinned toolchain (blocker if absent)
+        run: |
+          set -euo pipefail
+          # toolchain.json pin: Xcode 26.0.1 / 17A400 / iOS SDK 26.0.
+          # A missing exact pin is an ENVIRONMENT ACCEPTANCE BLOCKER —
+          # never silently substitute another Xcode.
+          REQUIRED_VERSION="Xcode 26.0.1"
+          REQUIRED_BUILD="17A400"
+          found=""
+          for app in /Applications/Xcode_26.0.1.app /Applications/Xcode_26.0.1_*.app /Applications/Xcode_26.0.app /Applications/Xcode.app; do
+            [ -d "$app" ] || continue
+            dev="$app/Contents/Developer"
+            ver=$(DEVELOPER_DIR="$dev" xcodebuild -version 2>/dev/null | tr -d '\r') || continue
+            vline=$(echo "$ver" | head -1)
+            bline=$(echo "$ver" | grep -i "build version" | awk '{print $3}')
+            if [ "$vline" = "$REQUIRED_VERSION" ] && [ "$bline" = "$REQUIRED_BUILD" ]; then
+              found="$dev"
+              echo "Exact pin found: $app ($vline, build $bline)"
+              break
+            fi
+          done
+          if [ -z "$found" ]; then
+            echo "::error::ACCEPTANCE BLOCKER: required toolchain $REQUIRED_VERSION ($REQUIRED_BUILD) not present on this runner. Enumerated candidates:"
+            for app in /Applications/Xcode*.app; do
+              [ -d "$app" ] || continue
+              echo "$app -> $(DEVELOPER_DIR="$app/Contents/Developer" xcodebuild -version 2>/dev/null | tr -d '\r' | head -1)"
+            done
+            exit 1
+          fi
+          # Make the pinned toolchain the default for every later step.
+          sudo xcode-select -s "$found"
+          xcodebuild -version
+
+      - name: Assert iOS SDK 26.0 available
+        run: |
+          set -euo pipefail
+          xcodebuild -sdk iphoneos -showsdks \
+            | grep -E "iphonesimulator26\.0\b" \
+            || { echo "::error::ACCEPTANCE BLOCKER: iphonesimulator26.0 SDK missing from pinned Xcode"; exit 1; }
+
+      - name: Zero-network gate
+        run: bash scripts/check_zero_network.sh
+
+      - name: iPhone-only pre-build assertion
+        run: |
+          set -euo pipefail
+          echo "--- asserting TARGETED_DEVICE_FAMILY = 1 in CatchTally.xcodeproj ---"
+          grep -q "TARGETED_DEVICE_FAMILY = 1;" CatchTally.xcodeproj/project.pbxproj \
+            || { echo "::error::TARGETED_DEVICE_FAMILY = 1 missing from project"; exit 1; }
+          if grep -q "TARGETED_DEVICE_FAMILY = 1,2;" CatchTally.xcodeproj/project.pbxproj; then
+            echo "::error::iPad family (1,2) found — iPhone-only directive violated"
+            exit 1
+          fi
+          # Every explicit TARGETED_DEVICE_FAMILY setting must be exactly 1.
+          bad=$(grep -E "TARGETED_DEVICE_FAMILY = [^1;]" CatchTally.xcodeproj/project.pbxproj || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Non-iPhone TARGETED_DEVICE_FAMILY values found:"
+            echo "$bad"
+            exit 1
+          fi
+          count=$(grep -c "TARGETED_DEVICE_FAMILY = 1;" CatchTally.xcodeproj/project.pbxproj)
+          echo "TARGETED_DEVICE_FAMILY = 1 asserted in $count places"
+
+      - name: Build for iphonesimulator
+        run: |
+          set -euo pipefail
+          xcodebuild -project CatchTally.xcodeproj \
+            -scheme CatchTally \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            -derivedDataPath DerivedData \
+            build
+
+      - name: iPhone-only post-build assertion (built Info.plist)
+        run: |
+          set -euo pipefail
+          APP=$(find DerivedData/Build/Products -maxdepth 2 -name "CatchTally.app" -type d | head -1)
+          [ -n "$APP" ] || { echo "::error::built app not found"; exit 1; }
+          echo "Checking $APP/Info.plist"
+          fam=$(plutil -extract UIDeviceFamily xml1 -o - "$APP/Info.plist" \
+                | grep -c "<integer>1</integer>")
+          [ "$fam" = "1" ] || { echo "::error::UIDeviceFamily is not [1]: $(plutil -extract UIDeviceFamily xml1 -o - "$APP/Info.plist")"; exit 1; }
+          if plutil -extract UIDeviceFamily xml1 -o - "$APP/Info.plist" | grep -q "<integer>2</integer>"; then
+            echo "::error::built app declares iPad (UIDeviceFamily contains 2)"
+            exit 1
+          fi
+          echo "Built app UIDeviceFamily == [1]: PASS"
+          bundle_id=$(plutil -extract CFBundleIdentifier raw -o - "$APP/Info.plist")
+          [ "$bundle_id" = "com.infinityball.catchtally" ] \
+            || { echo "::error::bundle id is $bundle_id"; exit 1; }
+          echo "Bundle id $bundle_id: PASS"
+          [ -f "$APP/PrivacyInfo.xcprivacy" ] \
+            || { echo "::error::PrivacyInfo.xcprivacy not embedded in app bundle"; exit 1; }
+          echo "Privacy manifest embedded: PASS"
