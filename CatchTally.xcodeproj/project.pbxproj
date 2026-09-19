@@ -304,8 +304,7 @@
 /* Begin XCSwiftPackageProductDependency section */
 		AA00000000000000000000AF /* CatchTallyKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AA00000000000000000000AE /* XCLocalSwiftPackageReference "Packages/CatchTallyKit" */;
-			product = CatchTallyKit;
+			productName = CatchTallyKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
