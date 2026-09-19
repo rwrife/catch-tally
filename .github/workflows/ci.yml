@@ -26,6 +26,7 @@ jobs:
       - name: Gitignore keeps signing material out
         run: |
           set -e
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           for f in fake.p8 fake.p12 fake.mobileprovision fake.cer; do
             touch "$f"
             git check-ignore -q "$f" || { echo "FAIL: $f is not gitignored"; exit 1; }
@@ -53,7 +54,7 @@ jobs:
             dev="$app/Contents/Developer"
             ver=$(DEVELOPER_DIR="$dev" xcodebuild -version 2>/dev/null | tr -d '\r') || continue
             vline=$(echo "$ver" | head -1)
-            bline=$(echo "$ver" | tail -1 | awk '{print $2}')
+            bline=$(echo "$ver" | grep -i "build version" | awk '{print $3}')
             if [ "$vline" = "$REQUIRED_VERSION" ] && [ "$bline" = "$REQUIRED_BUILD" ]; then
               found="$dev"
               echo "Exact pin found: $app ($vline, build $bline)"
