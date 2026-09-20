@@ -8,8 +8,8 @@ struct PlaceholderTests {
         #expect(CatchTallyKit.domain == "CatchTallyKit")
     }
 
-    @Test("milestone marker is set for M0")
+    @Test("milestone marker is set for M1 (domain core)")
     func milestoneMarker() {
-        #expect(CatchTallyKit.milestone == "M0-skeleton")
+        #expect(CatchTallyKit.milestone == "M1-domain-core")
     }
 }
