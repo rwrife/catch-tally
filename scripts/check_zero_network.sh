@@ -39,7 +39,10 @@ matches=""
 for root in "${ROOTS[@]}"; do
   [ -d "$root" ] || continue
   for pat in "${PATTERNS[@]}"; do
+    # --exclude-dir=.build: SPM dependency checkouts are vendored third-party
+    # sources, not first-party code; the gate governs OUR usage only.
     hits=$(grep -RnE --include='*.swift' --include='*.h' --include='*.m' --include='*.c' \
+      --exclude-dir=.build \
       "$pat" "$root" 2>/dev/null || true)
     [ -n "$hits" ] && matches+="$hits"$'\n'
   done
