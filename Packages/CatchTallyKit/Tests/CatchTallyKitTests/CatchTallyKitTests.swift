@@ -323,3 +323,102 @@ struct UnknownLengthTests {
         #expect(!unitless.hasLength)   // half-recorded stays unknown
     }
 }
+
+@Suite("Quick Tally reads (issue #3)")
+struct QuickTallyReadTests {
+    @Test("sessionGrandTotal sums across all species, kept separately")
+    func grandTotal() throws {
+        let (store, speciesId, sessionId, _) = try makeFixture()
+        var trout = Species(name: "Trout")
+        try store.saveSpecies(&trout)
+
+        try store.addBatch(sessionId: sessionId, speciesId: speciesId, count: 3)
+        try store.addCatch(sessionId: sessionId, speciesId: trout.id!, disposition: .released)
+        try store.addCatch(sessionId: sessionId, speciesId: trout.id!, disposition: .kept)
+
+        // 5 entries total, 4 kept (3 bass + 1 trout kept).
+        #expect(try store.sessionGrandTotal(sessionId: sessionId)
+                == SpeciesTally(total: 5, kept: 4))
+        // Empty session grand total is zero, not nil/unknown.
+        var empty = Session(date: Date())
+        try store.saveSession(&empty)
+        #expect(try store.sessionGrandTotal(sessionId: empty.id!)
+                == SpeciesTally(total: 0, kept: 0))
+    }
+
+    @Test("lastMutation describes the newest add for the undo affordance")
+    func lastMutationAdd() throws {
+        let (store, speciesId, sessionId, _) = try makeFixture()
+        #expect(try store.lastMutation() == nil)  // nothing to undo yet
+
+        try store.addCatch(sessionId: sessionId, speciesId: speciesId)
+        #expect(try store.lastMutation()
+                == LastMutation(kind: .added, speciesId: speciesId, count: 1))
+
+        try store.addBatch(sessionId: sessionId, speciesId: speciesId, count: 5)
+        #expect(try store.lastMutation()
+                == LastMutation(kind: .added, speciesId: speciesId, count: 5))
+
+        // Undo consumes it: description reflects the *previous* mutation.
+        try store.undoLast()
+        #expect(try store.lastMutation()
+                == LastMutation(kind: .added, speciesId: speciesId, count: 1))
+        try store.undoLast()
+        #expect(try store.lastMutation() == nil)
+    }
+
+    @Test("lastMutation reports decrements by species removed")
+    func lastMutationDecrement() throws {
+        let (store, speciesId, sessionId, _) = try makeFixture()
+        var trout = Species(name: "Trout")
+        try store.saveSpecies(&trout)
+
+        try store.addCatch(sessionId: sessionId, speciesId: speciesId)
+        try store.addCatch(sessionId: sessionId, speciesId: trout.id!)
+        try store.decrement(sessionId: sessionId, speciesId: trout.id!)
+
+        #expect(try store.lastMutation()
+                == LastMutation(kind: .removed, speciesId: trout.id!, count: 1))
+        // The bass add underneath is still the next undoable mutation.
+        try store.undoLast()   // undo the decrement
+        #expect(try store.lastMutation()
+                == LastMutation(kind: .added, speciesId: trout.id!, count: 1))
+    }
+
+    @Test("tally→store→reopen round-trip restores exact per-species and grand totals")
+    func sliceRoundTripAcrossReopen() throws {
+        // Mirrors the app's contract: UI reads only derived store state, so
+        // a reopen must reproduce identical snapshots.
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("catchtally-slice-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let store = try CatchTallyStore(url: dir)
+        var bass = Species(name: "Bass")
+        try store.saveSpecies(&bass)
+        var perch = Species(name: "Perch")
+        try store.saveSpecies(&perch)
+        var spot = Spot(name: "Mill Pond")
+        try store.saveSpot(&spot)
+        var session = Session(date: Date(), spotId: spot.id, status: .active)
+        try store.saveSession(&session)
+
+        try store.addCatch(sessionId: session.id!, speciesId: bass.id!)
+        try store.addBatch(sessionId: session.id!, speciesId: bass.id!, count: 4)
+        try store.decrement(sessionId: session.id!, speciesId: bass.id!)
+        try store.addCatch(sessionId: session.id!, speciesId: perch.id!, disposition: .released)
+
+        let reopened = try CatchTallyStore(url: dir)
+        let totals = try reopened.sessionTotals(sessionId: session.id!)
+        #expect(totals[bass.id!] == SpeciesTally(total: 4, kept: 4))
+        #expect(totals[perch.id!] == SpeciesTally(total: 1, kept: 0))
+        #expect(try reopened.sessionGrandTotal(sessionId: session.id!)
+                == SpeciesTally(total: 5, kept: 4))
+        // The undo journal survives relaunch too.
+        #expect(try reopened.lastMutation()
+                == LastMutation(kind: .added, speciesId: perch.id!, count: 1))
+        try reopened.undoLast()
+        #expect(try reopened.sessionGrandTotal(sessionId: session.id!)
+                == SpeciesTally(total: 4, kept: 4))
+    }
+}
