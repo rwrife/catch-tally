@@ -57,7 +57,8 @@ final class TallyModel {
             sessions = try store.fetchSessions()
             spots = try store.fetchSpots()
             if let active = activeSession,
-               let fresh = try store.fetchSession(id: active.id) {
+               let activeId = active.id,
+               let fresh = try store.fetchSession(id: activeId) {
                 activeSession = fresh
                 tallies = try store.sessionTotals(sessionId: fresh.id)
                 grandTotal = try store.sessionGrandTotal(sessionId: fresh.id)
