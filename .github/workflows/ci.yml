@@ -40,7 +40,13 @@ jobs:
 
   ios-build:
     name: iOS build + iPhone-only + toolchain pin
-    runs-on: macos-26
+    # macos-26 runner images carry Xcode 26.0.1 but lack the iOS 26.0
+    # simulator runtime (xcodebuild: "iOS 26.0 is not installed"). The
+    # macos-15 image hosts the same exact pin (Xcode 26.0.1 / 17A400)
+    # WITH the 26.0 runtime installed — proven by split-slip/seat-weave
+    # CI on the same pin. The strict pin check below still applies; this
+    # is not a silent toolchain substitution.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
