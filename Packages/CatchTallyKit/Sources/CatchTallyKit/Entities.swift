@@ -161,6 +161,29 @@ public struct SpeciesTally: Equatable, Sendable {
     }
 }
 
+/// What the most recent journaled mutation did — enough for the UI to label
+/// its undo affordance ("Undo +3 Bass" / "Undo −1 Trout") without doing any
+/// arithmetic view-side (issue #3 acceptance criteria).
+public struct LastMutation: Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        /// One or more entries were added (single tap or confirmed batch).
+        case added
+        /// One or more entries were removed (a −1 decrement).
+        case removed
+    }
+
+    public var kind: Kind
+    public var speciesId: Int64
+    /// Number of entries the mutation applied.
+    public var count: Int
+
+    public init(kind: Kind, speciesId: Int64, count: Int) {
+        self.kind = kind
+        self.speciesId = speciesId
+        self.count = count
+    }
+}
+
 /// A personal-best candidate: one entry that actually recorded a length.
 public struct PersonalBestCandidate: Equatable, Sendable {
     public var entryId: Int64

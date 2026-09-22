@@ -184,6 +184,10 @@ public final class CatchTallyStore: Sendable {
         try reader.read { r in try Session.order(Column("date").desc).fetchAll(r) }
     }
 
+    public func fetchSession(id: Int64) throws -> Session? {
+        try reader.read { r in try Session.fetchOne(r, key: id) }
+    }
+
     public func fetchEntries(sessionId: Int64) throws -> [CatchEntry] {
         try reader.read { r in
             try CatchEntry
@@ -370,6 +374,80 @@ public final class CatchTallyStore: Sendable {
                     kept: row["kept"] ?? 0)
             }
             return result
+        }
+    }
+
+    /// Grand totals across all species for one session (total entries, kept).
+    public func sessionGrandTotal(sessionId: Int64) throws -> SpeciesTally {
+        try reader.read { r in
+            let total = try Int.fetchOne(
+                r,
+                sql: "SELECT COUNT(*) FROM catch_entry WHERE sessionId = ?",
+                arguments: [sessionId]) ?? 0
+            let kept = try Int.fetchOne(
+                r,
+                sql: """
+                SELECT COUNT(*) FROM catch_entry
+                WHERE sessionId = ? AND disposition = ?
+                """,
+                arguments: [sessionId, Disposition.kept.rawValue]) ?? 0
+            return SpeciesTally(total: total, kept: kept)
+        }
+    }
+
+    /// Description of the most recent journaled mutation, so the UI can
+    /// render a visible, correctly-labeled undo affordance without doing
+    /// arithmetic view-side. nil ⇒ nothing to undo.
+    public func lastMutation() throws -> LastMutation? {
+        try reader.read { r in
+            guard let row = try Row.fetchOne(
+                r,
+                sql: """
+                SELECT m.id AS id,
+                       (SELECT COUNT(*) FROM undo_entry e
+                         WHERE e.mutationId = m.id AND e.entryId >= 0) AS added,
+                       (SELECT COUNT(*) FROM undo_entry e
+                         WHERE e.mutationId = m.id AND e.entryId < 0) AS removed
+                FROM undo_mutation m ORDER BY m.id DESC LIMIT 1
+                """)
+            else { return nil }
+
+            let mutationId: Int64 = row["id"]
+            let added: Int = row["added"]
+            let removed: Int = row["removed"]
+            let kind: LastMutation.Kind = added > 0 ? .added : .removed
+            let count = added > 0 ? added : removed
+
+            // The species a mutation applied to: every entry it touched
+            // belongs to one species (add/decrement are per species).
+            var speciesId: Int64?
+            if added > 0 {
+                speciesId = try Int64.fetchOne(
+                    r,
+                    sql: """
+                    SELECT speciesId FROM catch_entry
+                    WHERE id IN (SELECT entryId FROM undo_entry
+                                 WHERE mutationId = ? AND entryId >= 0)
+                    LIMIT 1
+                    """,
+                    arguments: [mutationId])
+            } else if let data: Data = try Data.fetchOne(
+                r,
+                sql: """
+                SELECT removedSnapshot FROM undo_tombstone
+                WHERE entryId IN (SELECT -entryId FROM undo_entry
+                                  WHERE mutationId = ? AND entryId < 0)
+                ORDER BY id DESC LIMIT 1
+                """,
+                arguments: [mutationId])
+            {
+                // Decrement mutations removed rows, so read the species back
+                // out of the tombstone snapshot (JSON-decoded, not SQL-JSON,
+                // to stay portable across SQLite builds).
+                speciesId = try JSONDecoder().decode(CatchEntry.self, from: data).speciesId
+            }
+            guard let speciesId else { return nil }
+            return LastMutation(kind: kind, speciesId: speciesId, count: count)
         }
     }
 
