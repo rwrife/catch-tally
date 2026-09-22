@@ -60,8 +60,8 @@ final class TallyModel {
                let activeId = active.id,
                let fresh = try store.fetchSession(id: activeId) {
                 activeSession = fresh
-                tallies = try store.sessionTotals(sessionId: fresh.id)
-                grandTotal = try store.sessionGrandTotal(sessionId: fresh.id)
+                tallies = try store.sessionTotals(sessionId: activeId)
+                grandTotal = try store.sessionGrandTotal(sessionId: activeId)
                 lastMutation = try store.lastMutation()
                 canUndo = try store.canUndo()
             } else {
