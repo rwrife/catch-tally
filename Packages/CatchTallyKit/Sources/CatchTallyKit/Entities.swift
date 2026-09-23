@@ -78,19 +78,30 @@ public struct Session: Codable, Equatable, Sendable, FetchableRecord, MutablePer
     public var spotId: Int64?
     public var notes: String?
     public var status: SessionStatus
+    /// The date frozen at session-close time. nil ⇒ session never closed.
+    /// While frozen, `date` only changes through `editSessionDate`, which
+    /// requires an explicit audit note (issue #4 acceptance criteria).
+    public var frozenDate: Date?
+    /// Append-only audit trail of explicit frozen-date edits, one line each:
+    /// "<ISO8601> — '<user note>' (was <old date>)". nil ⇒ no edits.
+    public var dateAuditNote: String?
 
     public init(
         id: Int64? = nil,
         date: Date,
         spotId: Int64? = nil,
         notes: String? = nil,
-        status: SessionStatus = .active
+        status: SessionStatus = .active,
+        frozenDate: Date? = nil,
+        dateAuditNote: String? = nil
     ) {
         self.id = id
         self.date = date
         self.spotId = spotId
         self.notes = notes
         self.status = status
+        self.frozenDate = frozenDate
+        self.dateAuditNote = dateAuditNote
     }
 
     public mutating func didInsert(_ inserted: InsertionSuccess) {
@@ -115,6 +126,9 @@ public struct CatchEntry: Codable, Equatable, Sendable, FetchableRecord, Mutable
     public var disposition: Disposition
     /// App-private photo reference (filename of a copied image). nil ⇒ none.
     public var photoRef: String?
+    /// User-typed description of the attached photo, surfaced to VoiceOver
+    /// (issue #4 accessibility criterion). Meaningful only when photoRef != nil.
+    public var photoAltText: String?
     public var notes: String?
     public var timestamp: Date
 
@@ -126,6 +140,7 @@ public struct CatchEntry: Codable, Equatable, Sendable, FetchableRecord, Mutable
         lengthUnit: LengthUnit? = nil,
         disposition: Disposition = .kept,
         photoRef: String? = nil,
+        photoAltText: String? = nil,
         notes: String? = nil,
         timestamp: Date
     ) {
@@ -136,6 +151,7 @@ public struct CatchEntry: Codable, Equatable, Sendable, FetchableRecord, Mutable
         self.lengthUnit = lengthUnit
         self.disposition = disposition
         self.photoRef = photoRef
+        self.photoAltText = photoAltText
         self.notes = notes
         self.timestamp = timestamp
     }

@@ -10,6 +10,12 @@ public enum TallyError: Error, Equatable, Sendable {
     case notFound(String)
     /// Undo was requested with an empty journal.
     case nothingToUndo
+    /// A frozen session date was submitted for editing without the required
+    /// explicit audit note (issue #4).
+    case missingAuditNote
+    /// Length and unit must be provided together (or both cleared) — a
+    /// length with no unit, or a unit with no length, is meaningless.
+    case incompleteLength
 }
 
 /// The durable local store: schema migrations, CRUD, tally arithmetic with a
@@ -111,6 +117,19 @@ public final class CatchTallyStore: Sendable {
             try db.create(index: "species_name", on: "species", columns: ["name"])
         }
 
+        // v3 — session workbench (issue #4):
+        // - session: frozen date + audit trail for explicit frozen-date edits
+        // - catch_entry: photo alt-text for VoiceOver description
+        m.registerMigration("v3-session-workbench") { db in
+            try db.alter(table: "session") { t in
+                t.add(column: "frozenDate", .datetime)
+                t.add(column: "dateAuditNote", .text)
+            }
+            try db.alter(table: "catch_entry") { t in
+                t.add(column: "photoAltText", .text)
+            }
+        }
+
         // Ordered registry of applied migrations — used for version reporting.
         try m.migrate(writer)
     }
@@ -119,6 +138,7 @@ public final class CatchTallyStore: Sendable {
     public static let migrationIdentifiers = [
         "v1-initial",
         "v2-species-name-index",
+        "v3-session-workbench",
     ]
 
     /// Latest applied schema version (nil on an unmigrated database).
@@ -172,10 +192,53 @@ public final class CatchTallyStore: Sendable {
         try writer.write { w in try session.save(w) }
     }
 
-    public func closeSession(id: Int64) throws {
+    /// Close a session and FREEZE its date (issue #4): `frozenDate` records
+    /// the close time and the session date can afterwards only change via
+    /// `editSessionDate`, which demands an explicit user audit note.
+    /// Closing an already-closed session is a no-op on the freeze — the
+    /// original frozen date is preserved, never overwritten.
+    public func closeSession(id: Int64, closedAt: Date = Date()) throws {
         try writer.write { w in
             guard var s = try Session.fetchOne(w, key: id) else { throw TallyError.notFound("session \(id)") }
             s.status = .closed
+            if s.frozenDate == nil { s.frozenDate = closedAt }
+            try s.update(w)
+        }
+    }
+
+    /// Explicitly change a frozen session's date, requiring the user's own
+    /// audit note explaining why (issue #4 acceptance criteria). The note is
+    /// appended to the session's audit trail with the prior date, verbatim.
+    /// - Parameter note: trimmed-empty notes are rejected with
+    ///   `TallyError.missingAuditNote` — an unfrozen (active) session may be
+    ///   re-dated freely, so this method refuses to launder a silent edit
+    ///   onto a frozen one.
+    public func editSessionDate(id: Int64, to newDate: Date, auditNote note: String) throws {
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw TallyError.missingAuditNote }
+        try writer.write { w in
+            guard var s = try Session.fetchOne(w, key: id) else { throw TallyError.notFound("session \(id)") }
+            guard s.frozenDate != nil else {
+                // Active sessions aren't frozen; date edits go through
+                // saveSession. Routing them here would skip the audit
+                // requirement the caller *thinks* it is satisfying.
+                throw TallyError.notFound("session \(id) is not frozen — no audit edit needed")
+            }
+            let stamp = ISO8601DateFormatter().string(from: Date())
+            let line = "\(stamp) — '\(trimmed)' (was \(ISO8601DateFormatter().string(from: s.date)))"
+            s.dateAuditNote = s.dateAuditNote.map { $0 + "\n" + line } ?? line
+            s.date = newDate
+            try s.update(w)
+        }
+    }
+
+    /// Change an ACTIVE session's date (no audit needed — freezing hasn't
+    /// happened yet). Frozen sessions must go through `editSessionDate`.
+    public func setSessionDate(id: Int64, to newDate: Date) throws {
+        try writer.write { w in
+            guard var s = try Session.fetchOne(w, key: id) else { throw TallyError.notFound("session \(id)") }
+            guard s.frozenDate == nil else { throw TallyError.missingAuditNote }
+            s.date = newDate
             try s.update(w)
         }
     }
@@ -194,6 +257,152 @@ public final class CatchTallyStore: Sendable {
                 .filter(Column("sessionId") == sessionId)
                 .order(Column("timestamp"), Column("id"))
                 .fetchAll(r)
+        }
+    }
+
+    /// Entries for a session filtered by a quick filter (issue #4). The
+    /// filter runs in the domain layer via `EntryFilter` so UI and tests
+    /// share one definition of "released / kept / no length recorded".
+    public func fetchEntries(sessionId: Int64, filter: EntryFilter) throws -> [CatchEntry] {
+        filter.apply(to: try fetchEntries(sessionId: sessionId))
+    }
+
+    public func fetchEntry(id: Int64) throws -> CatchEntry? {
+        try reader.read { r in try CatchEntry.fetchOne(r, key: id) }
+    }
+
+    // MARK: - Entry editing (session workbench, issue #4)
+
+    /// Update one entry's length/unit/disposition/notes from the detail
+    /// editor. Length and unit must be set together or both cleared
+    /// (`TallyError.incompleteLength`). The stored row's photoRef and
+    /// photoAltText are preserved — photos change only through the
+    /// dedicated attach/detach methods so files can never orphan.
+    /// Editing an entry in a CLOSED session is allowed (dock-side editing
+    /// is the whole point of the workbench).
+    public func updateEntryDetail(
+        id: Int64,
+        length: Double?,
+        lengthUnit: LengthUnit?,
+        disposition: Disposition,
+        notes: String?
+    ) throws -> CatchEntry {
+        guard (length == nil) == (lengthUnit == nil) else {
+            throw TallyError.incompleteLength
+        }
+        return try writer.write { w in
+            guard var entry = try CatchEntry.fetchOne(w, key: id) else {
+                throw TallyError.notFound("entry \(id)")
+            }
+            entry.length = length
+            entry.lengthUnit = lengthUnit
+            entry.disposition = disposition
+            let trimmed = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+            entry.notes = (trimmed?.isEmpty == true) ? nil : trimmed
+            try entry.update(w)
+            return entry
+        }
+    }
+
+    /// Flip keep ↔ release (quick transition from the entry list).
+    @discardableResult
+    public func toggleDisposition(id: Int64) throws -> Disposition {
+        try writer.write { w in
+            guard var entry = try CatchEntry.fetchOne(w, key: id) else {
+                throw TallyError.notFound("entry \(id)")
+            }
+            entry.disposition = entry.disposition == .kept ? .released : .kept
+            try entry.update(w)
+            return entry.disposition
+        }
+    }
+
+    /// Attach (or re-attach) an alt-text description for the entry's photo.
+    /// Refusing alt-text edits on a photo-less entry keeps the pair atomic.
+    public func setEntryPhotoAltText(id: Int64, altText: String?) throws {
+        try writer.write { w in
+            guard var entry = try CatchEntry.fetchOne(w, key: id) else {
+                throw TallyError.notFound("entry \(id)")
+            }
+            guard entry.photoRef != nil else { throw PhotoStoreError.photoMissing("(none)") }
+            let trimmed = altText?.trimmingCharacters(in: .whitespacesAndNewlines)
+            entry.photoAltText = (trimmed?.isEmpty == true) ? nil : trimmed
+            try entry.update(w)
+        }
+    }
+
+    /// Attach a photo copy to an entry through the injected photo store
+    /// (issue #4): bytes are written FIRST, then the reference is stored —
+    /// if the DB write throws, the just-written file is deleted, so a
+    /// failure never leaves an orphan file behind.
+    /// - Throws: `PhotoStoreError.photoAlreadyAttached` when the entry
+    ///   already has a photo (call `detachEntryPhoto` first — one photo per
+    ///   entry keeps lifecycle bookkeeping trivial).
+    @discardableResult
+    public func attachEntryPhoto(
+        id: Int64,
+        data: Data,
+        ref: String,
+        altText: String?,
+        to photoStore: any EntryPhotoStore
+    ) throws -> CatchEntry {
+        try writer.write { w in
+            guard var entry = try CatchEntry.fetchOne(w, key: id) else {
+                throw TallyError.notFound("entry \(id)")
+            }
+            guard entry.photoRef == nil else { throw PhotoStoreError.photoAlreadyAttached }
+            try photoStore.writePhoto(data: data, ref: ref)
+            do {
+                let trimmed = altText?.trimmingCharacters(in: .whitespacesAndNewlines)
+                entry.photoRef = ref
+                entry.photoAltText = (trimmed?.isEmpty == true) ? nil : trimmed
+                try entry.update(w)
+            } catch {
+                // Roll back the file so DB and store stay consistent.
+                try? photoStore.deletePhoto(ref: ref)
+                throw error
+            }
+            return entry
+        }
+    }
+
+    /// Detach and delete an entry's photo copy (user-initiated removal).
+    /// Idempotent: detaching an entry without a photo mutates nothing.
+    public func detachEntryPhoto(id: Int64, from photoStore: any EntryPhotoStore) throws {
+        try writer.write { w in
+            guard var entry = try CatchEntry.fetchOne(w, key: id) else {
+                throw TallyError.notFound("entry \(id)")
+            }
+            guard let ref = entry.photoRef else { return }
+            try photoStore.deletePhoto(ref: ref)
+            entry.photoRef = nil
+            entry.photoAltText = nil
+            try entry.update(w)
+        }
+    }
+
+    /// Hard-delete a single entry from the workbench list, removing its
+    /// photo copy through the injected store. Unlike `decrement` this is a
+    /// workbench edit, not tally arithmetic — it is NOT journaled for undo.
+    public func deleteEntry(id: Int64, from photoStore: (any EntryPhotoStore)? = nil) throws {
+        try writer.write { w in
+            guard let entry = try CatchEntry.fetchOne(w, key: id) else {
+                throw TallyError.notFound("entry \(id)")
+            }
+            if let ref = entry.photoRef, let photoStore {
+                try photoStore.deletePhoto(ref: ref)
+            }
+            try entry.delete(w)
+        }
+    }
+
+    /// Count how many entries currently reference a photo ref — used by
+    /// tests and future GC passes to prove no orphan/dangling references.
+    public func entryCount(usingPhotoRef ref: String) throws -> Int {
+        try reader.read { r in
+            try Int.fetchOne(
+                r, sql: "SELECT COUNT(*) FROM catch_entry WHERE photoRef = ?",
+                arguments: [ref]) ?? 0
         }
     }
 
@@ -298,8 +507,8 @@ public final class CatchTallyStore: Sendable {
                             sql: """
                             INSERT INTO catch_entry
                                 (id, sessionId, speciesId, length, lengthUnit,
-                                 disposition, photoRef, notes, timestamp)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 disposition, photoRef, photoAltText, notes, timestamp)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             arguments: [
                                 removedId,
@@ -309,6 +518,7 @@ public final class CatchTallyStore: Sendable {
                                 entry.lengthUnit?.rawValue,
                                 entry.disposition.rawValue,
                                 entry.photoRef,
+                                entry.photoAltText,
                                 entry.notes,
                                 entry.timestamp,
                             ])
