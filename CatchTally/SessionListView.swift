@@ -1,10 +1,13 @@
 import SwiftUI
 import CatchTallyKit
 
-/// Session list + start-session entry point (issue #3).
+/// Session list + start-session entry point (issue #3; workbench hook in #4).
+/// Active sessions resume Quick Tally; closed sessions open the Session
+/// Workbench (issue #4) via `onOpenWorkbench`.
 struct SessionListView: View {
     @Bindable var model: TallyModel
     @Binding var showStartSession: Bool
+    var onOpenWorkbench: (_ sessionId: Int64) -> Void
 
     var body: some View {
         List {
@@ -23,12 +26,14 @@ struct SessionListView: View {
                             .onTapGesture {
                                 if session.status == .active {
                                     model.openSession(session)
+                                } else if let id = session.id {
+                                    onOpenWorkbench(id)
                                 }
                             }
                             .accessibilityHint(
                                 session.status == .active
                                     ? "Double tap to resume tallying"
-                                    : "Closed session"
+                                    : "Double tap to open the session workbench"
                             )
                     }
                 }

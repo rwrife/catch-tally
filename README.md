@@ -110,9 +110,12 @@ hardware or SDKs.
 
 ## Current status
 
-**Skeleton + CI landed.** `CatchTally.xcodeproj` (SwiftUI app target, bundle id
+**M3 (session workbench) landed.** `CatchTally.xcodeproj` (SwiftUI app target, bundle id
 `com.infinityball.catchtally`), `Packages/CatchTallyKit` (pure-Swift domain package),
 iPhone-only + zero-network + Xcode-pin CI gates, and a privacy manifest are in place.
+The Quick Tally slice and the session workbench (entry detail editing, quick filters,
+app-private photo copies with VoiceOver alt text, close-with-freeze + audited date
+edits, `TallyWorkspaceLayout` seam) are implemented.
 No device/simulator test results, archive, or TestFlight binary exist yet — macOS CI
 builds for the simulator and asserts the iPhone-only/toolchain gates; the domain
 package test suite runs on Linux CI.
@@ -120,8 +123,9 @@ package test suite runs on Linux CI.
 Milestones:
 1. ✅ Repo scaffold (README, PLAN, toolchain pin, backlog)
 2. ✅ Skeleton + CI (iPhone-only, iOS 26 SDK pin, zero-network gate)
-3. ⬜ Domain layer + Quick Tally vertical slice
-4. ⬜ Session detail, PB board, spot history
+3. ✅ Domain layer + Quick Tally vertical slice
+4. ✅ Session detail workbench (photos, filters, frozen-date audit, layout seam)
+   — personal-best board and spot history still ahead
 5. ⬜ Backup/export + privacy controls
 6. ⬜ TestFlight release pipeline
 

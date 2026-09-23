@@ -8,6 +8,8 @@ import CatchTallyKit
 struct QuickTallyView: View {
     @Bindable var model: TallyModel
     let session: Session
+    /// Opens the Session Workbench for this session (issue #4).
+    var onOpenWorkbench: () -> Void
 
     /// Long-press pending batch: species + candidate count shown in the
     /// confirmation dialog. The count is only *proposed* here — the store
@@ -27,6 +29,14 @@ struct QuickTallyView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("End Session") { model.closeActiveSession() }
                     .accessibilityIdentifier("end-session-button")
+            }
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    onOpenWorkbench()
+                } label: {
+                    Label("Workbench", systemImage: "list.bullet.rectangle")
+                }
+                .accessibilityIdentifier("open-workbench-button")
             }
         }
         .safeAreaInset(edge: .bottom) { undoBar }

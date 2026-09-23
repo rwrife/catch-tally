@@ -198,21 +198,26 @@ struct StoreTests {
     @Test("fresh database migrates to the latest schema version")
     func freshMigration() throws {
         let store = try CatchTallyStore()
-        #expect(try store.currentSchemaVersion() == "v2-species-name-index")
+        #expect(try store.currentSchemaVersion() == "v3-session-workbench")
     }
 
     @Test("v1 database upgrades through the ordered migration path")
     func upgradePath() throws {
         // Rebuild a v1-only database by replaying just the first migration,
-        // then verify the real migrator detects the pending v2 upgrade and
-        // applies it without data loss.
+        // then verify the real migrator detects the pending v2/v3 upgrades
+        // and applies them without data loss.
         let store = try CatchTallyStore()
 
-        // Drop to v1: remove the v2 artifact (index) and the v2 migration
-        // bookkeeping row, exactly as a v1 database would look pre-upgrade.
+        // Drop to v1: remove every artifact later migrations added (v2's
+        // index, v3's added columns) plus their bookkeeping rows, exactly
+        // as a v1 database would look pre-upgrade. SQLite ≥ 3.35 supports
+        // DROP COLUMN; both the Linux system SQLite and Apple's do.
         try store.write { w in
             try w.execute(sql: "DROP INDEX species_name")
-            try w.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v2-species-name-index'")
+            try w.execute(sql: "ALTER TABLE session DROP COLUMN frozenDate")
+            try w.execute(sql: "ALTER TABLE session DROP COLUMN dateAuditNote")
+            try w.execute(sql: "ALTER TABLE catch_entry DROP COLUMN photoAltText")
+            try w.execute(sql: "DELETE FROM grdb_migrations WHERE identifier != 'v1-initial'")
         }
         #expect(try store.currentSchemaVersion() == "v1-initial")
 
@@ -220,7 +225,7 @@ struct StoreTests {
         try store.saveSpecies(&species)
 
         try store.migrate()  // upgrade path
-        #expect(try store.currentSchemaVersion() == "v2-species-name-index")
+        #expect(try store.currentSchemaVersion() == "v3-session-workbench")
         // Existing data survived the upgrade.
         #expect(try store.fetchSpecies().map(\.name) == ["Drum"])
     }
