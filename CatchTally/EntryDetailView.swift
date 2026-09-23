@@ -53,8 +53,10 @@ struct EntryDetailView: View {
                 .accessibilityIdentifier("detail-disposition")
             }
 
-            Section("Photo") {
+            Section {
                 photoSection
+            } header: {
+                Text("Photo")
             } footer: {
                 Text("The app stores its own downscaled copy privately — your photo library is never modified, and the app never touches the network.")
             }
