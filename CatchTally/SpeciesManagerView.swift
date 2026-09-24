@@ -9,6 +9,8 @@ struct SpeciesManagerView: View {
     @State private var renaming: Species?
     @State private var renameText = ""
     @State private var pendingDelete: Species?
+    @State private var editingNote: Species?
+    @State private var noteText = ""
 
     var body: some View {
         NavigationStack {
@@ -45,6 +47,10 @@ struct SpeciesManagerView: View {
                                     renameText = sp.name
                                     renaming = sp
                                 }
+                                Button("Note") {
+                                    noteText = sp.keepLimitNote ?? ""
+                                    editingNote = sp
+                                }
                             }
                             .accessibilityElement(children: .combine)
                             .swipeActions {
@@ -75,6 +81,27 @@ struct SpeciesManagerView: View {
                     renaming = nil
                 }
                 Button("Cancel", role: .cancel) { renaming = nil }
+            }
+            .alert("Keep-limit note", isPresented: Binding(
+                get: { editingNote != nil },
+                set: { if !$0 { editingNote = nil } })
+            ) {
+                TextField("Your own note (optional)", text: $noteText)
+                Button("Save") {
+                    if let sp = editingNote {
+                        model.setKeepLimitNote(id: sp.id!, note: noteText)
+                    }
+                    editingNote = nil
+                }
+                Button("Delete note", role: .destructive) {
+                    if let sp = editingNote {
+                        model.setKeepLimitNote(id: sp.id!, note: nil)
+                    }
+                    editingNote = nil
+                }
+                Button("Cancel", role: .cancel) { editingNote = nil }
+            } message: {
+                Text("Your own reminder, kept verbatim and private. Catch Tally ships no regulation data — this note is never legal advice.")
             }
             .confirmationDialog(
                 "Delete this species?",
