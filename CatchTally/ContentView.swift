@@ -48,6 +48,17 @@ struct ContentView: View {
                         }
                         .accessibilityIdentifier("species-manager-button")
                     }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        // Derived views (issue #5) push inside the existing
+                        // stack — no new full-screen layout, so the
+                        // TallyWorkspaceLayout seam rule is untouched.
+                        NavigationLink {
+                            InsightsView(store: model.store)
+                        } label: {
+                            Label("Insights", systemImage: "chart.bar.xaxis")
+                        }
+                        .accessibilityIdentifier("insights-button")
+                    }
                 }
                 .sheet(isPresented: $showSpecies) {
                     SpeciesManagerView(model: model)

@@ -24,8 +24,10 @@ public enum TallyError: Error, Equatable, Sendable {
 /// Totals and kept-counts are always derived from `catch_entry` — never
 /// stored as independent counters that could drift (PLAN.md determinism rule).
 public final class CatchTallyStore: Sendable {
-    private let reader: any DatabaseReader
-    private let writer: any DatabaseWriter
+    // Module-internal (not private) so same-module extensions (e.g.
+    // DerivedViews.swift) share one access path; never public API.
+    let reader: any DatabaseReader
+    let writer: any DatabaseWriter
 
     public init(_ writer: any DatabaseWriter) throws {
         self.writer = writer

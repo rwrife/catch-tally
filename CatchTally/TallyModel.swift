@@ -94,6 +94,15 @@ final class TallyModel {
         refresh()
     }
 
+    /// Set or clear a species' user-typed keep-limit note (issue #5).
+    /// The note is the user's own words — the store trims/clears it; the
+    /// app never treats it as regulation data.
+    func setKeepLimitNote(id: Int64, note: String?) {
+        do { try store.setKeepLimitNote(speciesId: id, note: note) }
+        catch { report(error) }
+        refresh()
+    }
+
     // MARK: - Sessions
 
     /// Start a session now. Optional inline spot: if `spotName` is non-empty
