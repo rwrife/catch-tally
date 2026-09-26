@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var model = TallyModel()
     @State private var showSpecies = false
     @State private var showStartSession = false
+    @State private var showSettings = false
     @State private var workbenchRoute: SessionRoute?
 
     /// Identifiable wrapper for workbench presentation state.
@@ -49,15 +50,21 @@ struct ContentView: View {
                         .accessibilityIdentifier("species-manager-button")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        // Derived views (issue #5) push inside the existing
-                        // stack — no new full-screen layout, so the
-                        // TallyWorkspaceLayout seam rule is untouched.
-                        NavigationLink {
-                            InsightsView(store: model.store)
-                        } label: {
-                            Label("Insights", systemImage: "chart.bar.xaxis")
+                        HStack(spacing: 12) {
+                            NavigationLink {
+                                InsightsView(store: model.store)
+                            } label: {
+                                Label("Insights", systemImage: "chart.bar.xaxis")
+                            }
+                            .accessibilityIdentifier("insights-button")
+
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Label("Settings", systemImage: "gearshape")
+                            }
+                            .accessibilityIdentifier("settings-button")
                         }
-                        .accessibilityIdentifier("insights-button")
                     }
                 }
                 .sheet(isPresented: $showSpecies) {
@@ -65,6 +72,9 @@ struct ContentView: View {
                 }
                 .sheet(isPresented: $showStartSession) {
                     StartSessionView(model: model)
+                }
+                .sheet(isPresented: $showSettings) {
+                    SettingsView(model: model)
                 }
                 .alert(
                     "Something went wrong",
