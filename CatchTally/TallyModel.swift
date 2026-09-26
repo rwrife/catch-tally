@@ -11,6 +11,7 @@ import CatchTallyKit
 @Observable
 final class TallyModel {
     let store: CatchTallyStore
+    let photoStore: any EntryPhotoStore
 
     // Published snapshot state (refreshed after every mutation).
     var species: [Species] = []
@@ -23,7 +24,7 @@ final class TallyModel {
     var canUndo = false
     var lastErrorMessage: String?
 
-    init() {
+    init(photoStore: (any EntryPhotoStore)? = nil) {
         do {
             store = try Self.openDefaultStore()
         } catch {
@@ -32,6 +33,7 @@ final class TallyModel {
             store = try! CatchTallyStore()
             lastErrorMessage = "Could not open the local store: \(error)"
         }
+        self.photoStore = photoStore ?? SessionWorkbenchModel.openDefaultPhotoStore()
         refresh()
     }
 
@@ -161,6 +163,35 @@ final class TallyModel {
 
     func undo() {
         do { try store.undoLast() } catch { report(error) }
+        refresh()
+    }
+
+    // MARK: - Data ownership & privacy (issue #6)
+
+    func makeBackupData() throws -> Data {
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? BackupMetadata.defaultAppVersion
+        return try store.exportBackup(photoStore: photoStore, appVersion: version)
+    }
+
+    func restoreBackup(from data: Data) throws {
+        try store.restoreBackup(from: data, photoStore: photoStore)
+        activeSession = nil
+        refresh()
+    }
+
+    func makeCSV() throws -> String {
+        try store.exportCatchCSV()
+    }
+
+    func storageUsage() throws -> StorageUsage {
+        try store.storageUsage(photoStore: photoStore)
+    }
+
+    func deleteAllData() throws {
+        try store.deleteAllData(photoStore: photoStore)
+        activeSession = nil
         refresh()
     }
 
