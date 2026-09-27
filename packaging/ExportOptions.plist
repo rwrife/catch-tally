@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- TestFlight upload for issue #7. No credential values here — the
+	     archive step authenticates via -authenticationKeyPath/-ID/-IssuerID
+	     from Actions secrets; export uses this method configuration only. -->
+	<key>destination</key>
+	<string>upload</string>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>thinning</key>
+	<string>&lt;none&gt;</string>
+	<key>uploadBitcode</key>
+	<false/>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>uploadMethod</key>
+	<string>app-store-connect</string>
+</dict>
+</plist>
