@@ -39,7 +39,9 @@ done
 deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
 
 jwt=$(ruby "$JWT_SCRIPT" --key-id "$KEY_ID" --issuer-id "$ISSUER_ID" --key-path "$KEY_PATH")
-app_response=$(curl -sS \
+# App Store Connect uses JSON:API filter[...] query parameters. Disable curl
+# URL globbing so square brackets are sent literally instead of parsed as ranges.
+app_response=$(curl -g -sS \
   -H "Authorization: Bearer $jwt" \
   "https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=${BUNDLE_ID}&limit=1")
 echo "--- App Store Connect app lookup response ---"
@@ -58,7 +60,7 @@ print(apps[0]['id'])
 while true; do
   jwt=$(ruby "$JWT_SCRIPT" --key-id "$KEY_ID" --issuer-id "$ISSUER_ID" --key-path "$KEY_PATH")
 
-  response=$(curl -sS \
+  response=$(curl -g -sS \
     -H "Authorization: Bearer $jwt" \
     "https://api.appstoreconnect.apple.com/v1/builds?filter[app]=${app_id}&filter[version]=${BUILD_NUMBER}&filter[preReleaseVersion.version]=${APP_VERSION}&sort=-uploadedDate&limit=10")
 
