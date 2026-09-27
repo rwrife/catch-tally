@@ -58,6 +58,9 @@ social features, cloud sync, fish-ID AI, weather, navigation, Android, native iP
 5. **M4 Derived views** (issue #5): PB board, spot history, kept-count vs limit notes.
 6. **M5 Data ownership** (issue #6): backup/restore, CSV export, privacy surfaces.
 7. **M6 Release** (issue #7): signing, TestFlight upload via ASC API secrets, release gates.
+   Implemented as tag-triggered `.github/workflows/release.yml`: archive + iPhone-only /
+   privacy-manifest release gates + ASC-API upload + real processing-state poll +
+   generated release notes from merged PRs.
 
 ## Testing strategy
 

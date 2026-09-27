@@ -125,9 +125,10 @@ Milestones:
 2. ✅ Skeleton + CI (iPhone-only, iOS 26 SDK pin, zero-network gate)
 3. ✅ Domain layer + Quick Tally vertical slice
 4. ✅ Session detail workbench (photos, filters, frozen-date audit, layout seam)
-   — personal-best board and spot history still ahead
-5. ⬜ Backup/export + privacy controls
-6. ⬜ TestFlight release pipeline
+5. ✅ Backup/export + privacy controls
+6. ✅ TestFlight release pipeline (`.github/workflows/release.yml`, tag-triggered;
+   real Apple-environment run required to confirm an actual processed build —
+   see release workflow run logs for the authoritative status)
 
 ## Development / build quickstart
 
@@ -142,5 +143,8 @@ bash scripts/check_zero_network.sh                        # empty-allowlist netw
 xcodebuild -project CatchTally.xcodeproj -scheme CatchTally -sdk iphonesimulator build
 ```
 
-Signing/TestFlight: releases build against the iOS 26-or-newer SDK and upload via the App
-Store Connect API using the Actions secrets listed above (secret names only).
+Signing/TestFlight: tag-triggered `release.yml` archives and uploads to TestFlight
+via the App Store Connect API (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`,
+`ASC_TEAM_ID` — secret names only), gated on the exact pinned toolchain,
+iPhone-only `UIDeviceFamily`, and a zero-tracking privacy manifest before upload.
+Processing state is polled from the real App Store Connect API — never assumed.

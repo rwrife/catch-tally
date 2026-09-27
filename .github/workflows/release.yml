@@ -1,0 +1,208 @@
+name: Release (TestFlight)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag or version override (defaults to GITHUB_REF_NAME)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    name: Build, gate, and upload to TestFlight
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select exact pinned toolchain (blocker if absent)
+        run: |
+          set -euo pipefail
+          dev=$(bash scripts/select_pinned_xcode.sh)
+          sudo xcode-select -s "$dev"
+          xcodebuild -version
+
+      - name: Assert iOS SDK 26.0 available
+        run: |
+          set -euo pipefail
+          xcodebuild -sdk iphoneos -showsdks \
+            | grep -E "iphoneos26\.0\b" \
+            || { echo "::error::ACCEPTANCE BLOCKER: iphoneos26.0 SDK missing from pinned Xcode"; exit 1; }
+
+      - name: Zero-network gate (contract)
+        run: bash scripts/check_zero_network.sh
+
+      - name: Gitignore keeps signing material out
+        run: |
+          set -e
+          for f in fake.p8 fake.p12 fake.mobileprovision fake.cer; do
+            touch "$f"
+            git check-ignore -q "$f" || { echo "FAIL: $f is not gitignored"; exit 1; }
+            rm "$f"
+          done
+          echo "Signing-material gitignore check: PASS"
+
+      - name: iPhone-only pre-archive assertion (project file)
+        run: |
+          set -euo pipefail
+          grep -q "TARGETED_DEVICE_FAMILY = 1;" CatchTally.xcodeproj/project.pbxproj \
+            || { echo "::error::TARGETED_DEVICE_FAMILY = 1 missing from project"; exit 1; }
+          if grep -q "TARGETED_DEVICE_FAMILY = 1,2;" CatchTally.xcodeproj/project.pbxproj; then
+            echo "::error::iPad family (1,2) found — iPhone-only directive violated"
+            exit 1
+          fi
+          bad=$(grep -E "TARGETED_DEVICE_FAMILY = [^1;]" CatchTally.xcodeproj/project.pbxproj || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Non-iPhone TARGETED_DEVICE_FAMILY values found:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "iPhone-only pre-archive assertion: PASS"
+
+      - name: Resolve version and monotonic build number
+        id: versioning
+        run: |
+          set -euo pipefail
+          raw_tag="${{ github.event.inputs.tag || github.ref_name }}"
+          clean_tag="${raw_tag#v}"
+          version="${clean_tag%%-*}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must begin with vMAJOR.MINOR.PATCH (got: $raw_tag)"
+            exit 1
+          fi
+          echo "tag=${raw_tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          build_number="${GITHUB_RUN_NUMBER}"
+          echo "build_number=${build_number}" >> "$GITHUB_OUTPUT"
+          echo "Target tag: ${raw_tag}, app version: ${version}, build number: ${build_number}"
+
+      - name: Prepare App Store Connect API key
+        run: |
+          set -euo pipefail
+          p8_dir="$RUNNER_TEMP/asc_auth"
+          mkdir -p "$p8_dir"
+          chmod 700 "$p8_dir"
+          p8_path="$p8_dir/AuthKey_${{ secrets.ASC_KEY_ID }}.p8"
+          printf '%s' "${{ secrets.ASC_KEY_P8 }}" > "$p8_path"
+          chmod 600 "$p8_path"
+          echo "P8_PATH=$p8_path" >> "$GITHUB_ENV"
+          echo "App Store Connect API key staged securely under RUNNER_TEMP"
+
+      - name: Archive CatchTally
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild -project CatchTally.xcodeproj \
+            -scheme CatchTally \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "build/CatchTally.xcarchive" \
+            MARKETING_VERSION="${{ steps.versioning.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.versioning.outputs.build_number }}" \
+            DEVELOPMENT_TEAM="${{ secrets.ASC_TEAM_ID }}" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$P8_PATH" \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
+            archive
+
+      - name: "Release gate: iPhone-only archived Info.plist"
+        run: |
+          set -euo pipefail
+          plist="build/CatchTally.xcarchive/Products/Applications/CatchTally.app/Info.plist"
+          [ -f "$plist" ] || { echo "::error::Archived Info.plist not found at $plist"; exit 1; }
+          fam=$(plutil -extract UIDeviceFamily xml1 -o - "$plist" | grep -c "<integer>1</integer>")
+          [ "$fam" = "1" ] || { echo "::error::UIDeviceFamily is not [1]: $(plutil -extract UIDeviceFamily xml1 -o - "$plist")"; exit 1; }
+          if plutil -extract UIDeviceFamily xml1 -o - "$plist" | grep -q "<integer>2</integer>"; then
+            echo "::error::Archived app declares iPad support (UIDeviceFamily contains 2)"
+            exit 1
+          fi
+          bundle_id=$(plutil -extract CFBundleIdentifier raw -o - "$plist")
+          [ "$bundle_id" = "com.infinityball.catchtally" ] || { echo "::error::Bundle ID is $bundle_id"; exit 1; }
+          echo "Archived app UIDeviceFamily == [1] and bundle ID $bundle_id: PASS"
+
+      - name: "Release gate: privacy manifest"
+        run: |
+          set -euo pipefail
+          privacy_file="build/CatchTally.xcarchive/Products/Applications/CatchTally.app/PrivacyInfo.xcprivacy"
+          [ -f "$privacy_file" ] || { echo "::error::PrivacyInfo.xcprivacy not present in archived app"; exit 1; }
+          tracking=$(plutil -extract NSPrivacyTracking raw -o - "$privacy_file" 2>/dev/null || echo "MISSING")
+          [ "$tracking" = "false" ] || { echo "::error::NSPrivacyTracking is not false ($tracking)"; exit 1; }
+          domains_count=$(plutil -extract NSPrivacyTrackingDomains xml1 -o - "$privacy_file" | grep -c "<string>" || true)
+          [ "$domains_count" -eq 0 ] || { echo "::error::Tracking domains present ($domains_count found)"; exit 1; }
+          collected_count=$(plutil -extract NSPrivacyCollectedDataTypes xml1 -o - "$privacy_file" | grep -c "<dict>" || true)
+          [ "$collected_count" -eq 0 ] || { echo "::error::Collected data types declared ($collected_count found)"; exit 1; }
+          echo "Privacy manifest: PASS (zero tracking, tracking domains, and collected data)"
+
+      - name: Export and upload archive to TestFlight
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "build/CatchTally.xcarchive" \
+            -exportPath "build/export" \
+            -exportOptionsPlist "packaging/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$P8_PATH" \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
+
+      - name: Poll TestFlight processing via App Store Connect API
+        run: |
+          set -euo pipefail
+          bash scripts/poll_testflight_build.sh \
+            --bundle-id "com.infinityball.catchtally" \
+            --version "${{ steps.versioning.outputs.version }}" \
+            --build-number "${{ steps.versioning.outputs.build_number }}" \
+            --jwt-script "scripts/asc_jwt.rb" \
+            --key-id "${{ secrets.ASC_KEY_ID }}" \
+            --issuer-id "${{ secrets.ASC_ISSUER_ID }}" \
+            --key-path "$P8_PATH" \
+            --timeout-seconds 1800 \
+            --interval-seconds 30
+
+      - name: Generate release notes from merged pull requests
+        run: |
+          set -euo pipefail
+          curl -sS \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?state=closed&per_page=100" \
+            > "$RUNNER_TEMP/pulls.json"
+          python3 scripts/generate_release_notes.py \
+            --pulls "$RUNNER_TEMP/pulls.json" \
+            --template packaging/release_notes_template.md \
+            --tag "${{ steps.versioning.outputs.tag }}" \
+            --output "$RUNNER_TEMP/release_notes.md"
+          cat "$RUNNER_TEMP/release_notes.md"
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.versioning.outputs.tag }}
+          name: Catch Tally ${{ steps.versioning.outputs.tag }}
+          body_path: ${{ runner.temp }}/release_notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Secure cleanup of App Store Connect signing key
+        if: always()
+        run: |
+          if [ -n "${P8_PATH:-}" ] && [ -f "$P8_PATH" ]; then
+            rm -f "$P8_PATH"
+            echo "Removed App Store Connect signing key from runner."
+          fi
